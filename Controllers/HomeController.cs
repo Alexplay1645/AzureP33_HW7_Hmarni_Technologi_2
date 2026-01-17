@@ -1,0 +1,175 @@
+﻿using AzureP33.Models;
+using AzureP33.Models.Home;
+using AzureP33.Models.Orm;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
+using Microsoft.AspNetCore.Mvc;
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
+
+namespace AzureP33.Controllers
+{
+    public class HomeController : Controller
+    {
+        private readonly ILogger<HomeController> _logger;
+        private readonly IConfiguration _configuration;
+        private static LanguagesResponse? languagesResponse;
+
+
+        public HomeController(ILogger<HomeController> logger, IConfiguration configuration)
+        {
+            _logger = logger;
+            _configuration = configuration;
+        }
+
+        public async Task<IActionResult> IndexAsync(HomeIndexFormModel? formModel)
+        {
+            Task<LanguagesResponse> respTask = GetLanguagesAsync();
+
+            HomeIndexViewModel viewModel = new()
+            {
+                PageTitle = "Перекладач",
+                FormModel = formModel?.Action == null ? null : formModel,
+                // LanguagesResponse = resp
+            };
+
+            if(formModel?.Action == "translate")
+            {
+                // Передано дані для перекладу               
+                string query = $"from={formModel.LangFrom}&to={formModel.LangTo}";
+                string textToTranslate = formModel.OriginalText;
+                object[] body = new object[] { new { Text = textToTranslate } };
+                var requestBody = JsonSerializer.Serialize(body);
+
+                string result = await RequestApi(query, requestBody, ApiMode.Translate);
+                if (result[0] == '[')
+                {
+                    viewModel.Items = JsonSerializer.Deserialize<List<TranslatorResponseItem>>(result);
+                }
+                else
+                {
+                    viewModel.ErrorResponse = JsonSerializer.Deserialize<TranslatorErrorResponse>(result);
+                }
+                // ViewData["result"] = result;   
+                // [{"translations":[{"text":"Greetings","to":"en"}]}]
+                // {"error":{"code":400036,"message":"The target language is not valid."}}
+                // {"error":{"code":401001,"message":"The request is not authorized because credentials are missing or invalid."}}
+            }
+
+            var resp = await respTask;
+
+            // if (formModel?.Action == "transliterate")
+            if(viewModel.Items != null)   // ознака успішно виконаного перекладу
+            {
+                // Знаходимо мову у resp.Transliterations і беремо перший (0) скрипт
+                LangData langData;
+                try { 
+                    langData = resp.Transliterations[formModel!.LangFrom];
+                    String fromScript = langData.Scripts![0].Code!;
+                    String toScript = langData.Scripts![0].ToScripts![0].Code!;
+
+                    string query = $"language={formModel.LangFrom}&fromScript={fromScript}&toScript={toScript}";
+                    var requestBody = JsonSerializer.Serialize(new object[] { 
+                        new { Text = formModel.OriginalText } 
+                    });
+                    viewModel.FromTransliteration = JsonSerializer.Deserialize<List<TransliteratorResponseItem>>(
+                        await RequestApi(query, requestBody, ApiMode.Transliterate)
+                    )![0];
+                    // ViewData["result"] = await RequestApi(query, requestBody, ApiMode.Transliterate);
+                }
+                catch { }
+
+                try
+                {
+                    langData = resp.Transliterations[formModel!.LangTo];
+                    String fromScript = langData.Scripts![0].Code!;
+                    String toScript = langData.Scripts![0].ToScripts![0].Code!;
+
+                    string query = $"language={formModel.LangTo}&fromScript={fromScript}&toScript={toScript}";
+                    var requestBody = JsonSerializer.Serialize(new object[] {
+                        new { Text = viewModel.Items[0].Translations[0].Text }
+                    });
+                    viewModel.ToTransliteration = JsonSerializer.Deserialize<List<TransliteratorResponseItem>>(
+                        await RequestApi(query, requestBody, ApiMode.Transliterate)
+                    )![0];
+
+                }
+                catch { }
+
+            }
+
+            viewModel.LanguagesResponse = await respTask;
+            return View(viewModel);
+        }
+
+        private async Task<LanguagesResponse> GetLanguagesAsync()
+        {
+            if(languagesResponse == null)
+            {
+                using HttpClient client = new();
+
+                languagesResponse = JsonSerializer.Deserialize<LanguagesResponse>(
+                    await client.GetStringAsync(
+                        @"https://api.cognitive.microsofttranslator.com/languages?api-version=3.0"
+                    )
+                );
+                if (languagesResponse == null)
+                {
+                    throw new Exception("LanguagesResponse got NULL result");
+                }
+            }
+            return languagesResponse;
+        }
+
+        private async Task<String> RequestApi(String query, String body, ApiMode apiMode)
+        {
+            var sec = _configuration.GetSection("Azure")?.GetSection("Translator") ?? throw new Exception("Configuration error: Azure.Translator is null");
+            String key = sec.GetValue<String>("Key") ?? throw new Exception("Configuration error: 'Key' is null");
+            String endpoint = sec.GetValue<String>("Endpoint") ?? throw new Exception("Configuration error: 'Endpoint' is null");
+            String location = sec.GetValue<String>("Location") ?? throw new Exception("Configuration error: 'Location' is null");
+            String apiVersion = sec.GetValue<String>("ApiVersion") ?? throw new Exception("Configuration error: 'ApiVersion' is null");
+            String apiPath = apiMode switch { 
+                ApiMode.Translate => sec.GetValue<String>("TranslatorPath"),
+                ApiMode.Transliterate => sec.GetValue<String>("TransliteratorPath"),
+                _ => null
+            } ?? throw new Exception("Configuration error: 'apiPath' is null");
+
+            using (var client2 = new HttpClient())
+            using (var request = new HttpRequestMessage())
+            {
+                request.Method = HttpMethod.Post;
+                request.RequestUri = new Uri($"{endpoint}{apiPath}?api-version={apiVersion}&{query}");
+                request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+                request.Headers.Add("Ocp-Apim-Subscription-Key", key);
+                request.Headers.Add("Ocp-Apim-Subscription-Region", location);
+                HttpResponseMessage response = await client2.SendAsync(request).ConfigureAwait(false);
+                string result = await response.Content.ReadAsStringAsync();
+                return result;
+            }
+        }
+
+
+
+        public IActionResult Privacy()
+        {
+            return View();
+        }
+
+        [ResponseCache(Duration = 0, Location = ResponseCacheLocation.None, NoStore = true)]
+        public IActionResult Error()
+        {
+            return View(new ErrorViewModel { RequestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier });
+        }
+    }
+
+
+    enum ApiMode   // https://learn.microsoft.com/en-us/azure/ai-services/translator/text-translation/reference/rest-api-guide?WT.mc_id=Portal-Microsoft_Azure_ProjectOxford
+    {
+        Translate,
+        Transliterate,
+    }
+}
+/* Д.З. Вилучити результат транслітерації з JSON відповіді, вивести його у полі для перекладу
+ * Здійснити публікацію (оновлення) проєкту 
+ * Прикласти посилання на сайт (***.azurewebsites.net)
+ */

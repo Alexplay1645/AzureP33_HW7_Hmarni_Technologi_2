@@ -1,0 +1,33 @@
+html {
+  font-size: 14px;
+}
+
+@media (min-width: 768px) {
+  html {
+    font-size: 16px;
+  }
+}
+
+html {
+  position: relative;
+  min-height: 100%;
+}
+
+body {
+  margin-bottom: 60px;
+}
+
+.text-block {
+    position: relative;
+}
+
+.transliteration {
+    margin-top: 6px;
+    font-size: 0.9rem;
+}
+
+.muted-text {
+    color: #6c757d;
+    font-size: 0.9em;
+    font-style: italic;
+}
