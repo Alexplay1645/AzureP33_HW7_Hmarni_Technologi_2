@@ -9,4 +9,4 @@
 🔗 https://azure-hw6-alex-2000-ceazhwa4gefugqbz.centralus-01.azurewebsites.net
 
 ## Репозиторій
-🔗 https://github.com/Alexplay1645/AzureP33_HW7_Hmarni_Technologi
+🔗 https://github.com/Alexplay1645/AzureP33_HW7_Hmarni_Technologi_2
